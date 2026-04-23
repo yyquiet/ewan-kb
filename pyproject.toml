@@ -30,6 +30,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+openai = [
+    "openai>=1.0.0",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.8.0",

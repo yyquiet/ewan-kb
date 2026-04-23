@@ -11,14 +11,13 @@
   python gen_code_module_docs.py --force        # 强制重新生成
   python gen_code_module_docs.py --domain 合同管理  # 只处理某域
 """
-import os, sys, re, json, time, argparse
+import os, sys, re, json, argparse
 sys.stdout.reconfigure(encoding='utf-8')
 from pathlib import Path
 from datetime import datetime
-import anthropic
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tools import config_loader as cfg
+from tools.config_loader import call_llm
 
 BASE_DIR    = cfg.get_kb_dir()
 DOMAINS_DIR = cfg.get_domains_dir()
@@ -27,13 +26,7 @@ CODE_ANALYSIS = cfg.get_knowledge_base_dir() / "_state" / "code_analysis.json"
 PROGRESS    = cfg.get_knowledge_base_dir() / "_state" / "code_module_progress.json"
 TODAY       = datetime.now().strftime("%Y-%m-%d")
 
-gcfg        = cfg.get_global_config()
-pcfg        = cfg.get_project_config()
-_AUTH_TOKEN = pcfg.get("api_key") or gcfg.api_key
-_BASE_URL   = pcfg.get("base_url") or gcfg.base_url
-MODEL       = pcfg.get("model") or gcfg.default_model
-MAX_TOKENS  = 3000
-_SYSTEM_NAME = pcfg.get("system_name", "业务系统")
+_SYSTEM_NAME = cfg.get_project_config().get("system_name", "业务系统")
 
 SKIP_DOMAINS = cfg.get_skip_domains()
 
@@ -94,25 +87,6 @@ updated: {{today}}
 """
 
 
-def call_claude(client, prompt: str) -> str:
-    for attempt in range(3):
-        try:
-            resp = client.messages.create(
-                model=MODEL, max_tokens=MAX_TOKENS,
-                messages=[{"role": "user",
-                           "content": prompt.encode("utf-8", "replace").decode("utf-8")}]
-            )
-            for block in resp.content:
-                if hasattr(block, 'text'):
-                    return block.text
-            return resp.content[0].text
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-            else:
-                raise
-
-
 def main():
     parser = argparse.ArgumentParser(description="生成代码模块说明文档")
     parser.add_argument("--domain", help="只处理指定域")
@@ -125,8 +99,6 @@ def main():
         return
 
     progress = load_json(PROGRESS)
-    client = (anthropic.Anthropic(api_key=_AUTH_TOKEN, base_url=_BASE_URL)
-              if _BASE_URL else anthropic.Anthropic())
 
     # 从 domains.json 获取每个域的 modules 映射
     domains_data = cfg._load_domains_json()
@@ -178,7 +150,7 @@ def main():
             )
 
             try:
-                output = call_claude(client, prompt)
+                output = call_llm(prompt, max_tokens=3000)
                 output = re.sub(r"^```yaml\s*\n", "", output.strip())
                 output = re.sub(r"\n```\s*$", "", output)
 

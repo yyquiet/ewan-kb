@@ -4,7 +4,7 @@
 BM25 索引构建与查询 — 基于 rank_bm25 + jieba 分词。
 
 索引覆盖：domains/ + knowledgeBase/ + source/docs/ 下的所有 .md 文件。
-缓存位置：graph/.cache/bm25_index.pkl
+缓存位置：knowledgeBase/_state/bm25_index.pkl
 失效策略：源文件最大 mtime > 索引文件 mtime 时自动重建。
 """
 from __future__ import annotations

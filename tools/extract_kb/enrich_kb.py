@@ -15,16 +15,15 @@
   python enrich_kb.py --type 需求文档          # 只处理某种文档类型
   python enrich_kb.py --domain 任务中心 --type 需求文档  # 组合过滤
 """
-import os, sys, re, json, time, argparse, threading
+import os, sys, re, json, argparse, threading
 sys.stdout.reconfigure(encoding='utf-8')
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import anthropic
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tools import config_loader as cfg
+from tools.config_loader import call_llm
 from tools.text_utils import parse_frontmatter
 
 # ── 路径配置（从配置文件加载）─────────────────────────────────────────────────
@@ -35,12 +34,6 @@ REPOS       = cfg.get_repos_dir()
 PROGRESS    = cfg.get_knowledge_base_dir() / "_state/enrich_progress.json"
 TODAY       = datetime.now().strftime("%Y-%m-%d")
 
-gcfg        = cfg.get_global_config()
-pcfg        = cfg.get_project_config()
-_AUTH_TOKEN = pcfg.get("api_key") or gcfg.api_key
-_BASE_URL   = pcfg.get("base_url") or gcfg.base_url
-MODEL       = pcfg.get("model") or gcfg.default_model
-MAX_TOKENS  = 4000
 _SYSTEM_NAME = cfg.get_project_config().get("system_name", "业务系统")
 
 # ── 域 → 代码模块映射（从 domains.json 加载）──────────────────────────────────
@@ -331,25 +324,6 @@ def find_related_docs(fpath: Path, title: str, domain: str,
 
 # ── Claude 调用 ──────────────────────────────────────────────────────────────
 
-def call_claude(client, prompt: str) -> str:
-    for attempt in range(3):
-        try:
-            resp = client.messages.create(
-                model=MODEL, max_tokens=MAX_TOKENS,
-                messages=[{"role": "user",
-                           "content": prompt.encode("utf-8", "replace").decode("utf-8")}]
-            )
-            for block in resp.content:
-                if hasattr(block, 'text'):
-                    return block.text
-            return resp.content[0].text
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-            else:
-                raise
-
-
 def clean_output(text: str) -> str:
     text = text.strip()
     text = re.sub(r'^```(?:yaml|markdown)?\s*\n', '', text)
@@ -380,7 +354,7 @@ def strip_existing_sections(text: str) -> str:
     ).rstrip()
 
 
-def enrich_one(client, fpath: Path,
+def enrich_one(fpath: Path,
                code_idx: dict, kw_idx: dict, ep_idx: dict,
                doc_idx: dict) -> None:
     original = fpath.read_text(encoding="utf-8", errors="replace")
@@ -426,7 +400,7 @@ def enrich_one(client, fpath: Path,
         related_docs=related_str[:800],
     )
 
-    appended = call_claude(client, prompt)
+    appended = call_llm(prompt, max_tokens=4000)
     appended = clean_output(appended)
 
     # 修正 frontmatter domain/updated，移除旧关联章节，追加新章节
@@ -499,8 +473,6 @@ def main():
 
     def _process_one(fpath: Path) -> bool:
         nonlocal done, errs
-        worker_client = (anthropic.Anthropic(api_key=_AUTH_TOKEN, base_url=_BASE_URL)
-                         if _BASE_URL else anthropic.Anthropic())
         key = str(fpath.relative_to(DOMAINS_DIR))
         try:
             fm = parse_frontmatter(fpath.read_text(encoding="utf-8", errors="replace")[:400])
@@ -508,7 +480,7 @@ def main():
             dom = fpath.parent.parent.name
             with log_lock:
                 log(f"  {title[:45]} ({dom}/{fpath.parent.name})")
-            enrich_one(worker_client, fpath, code_idx, kw_idx, ep_idx, doc_idx)
+            enrich_one(fpath, code_idx, kw_idx, ep_idx, doc_idx)
             with progress_lock:
                 progress[key] = "done"
                 done += 1

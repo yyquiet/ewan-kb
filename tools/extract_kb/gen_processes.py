@@ -13,15 +13,14 @@
   python gen_processes.py --domain 运配管理/运配任务  # 单个子域
   python gen_processes.py --force           # 强制重新生成
 """
-import os, sys, re, json, time, argparse, threading
+import os, sys, re, json, argparse, threading
 sys.stdout.reconfigure(encoding='utf-8')
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import anthropic
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tools import config_loader as cfg
+from tools.config_loader import call_llm
 from tools.text_utils import parse_frontmatter
 
 # ── 路径配置 ─────────────────────────────────────────────────────────────────
@@ -30,12 +29,6 @@ BASE_DIR    = cfg.get_kb_dir()
 DOMAINS_DIR = cfg.get_domains_dir()
 TODAY       = datetime.now().strftime("%Y-%m-%d")
 
-gcfg        = cfg.get_global_config()
-pcfg        = cfg.get_project_config()
-_AUTH_TOKEN = pcfg.get("api_key") or gcfg.api_key
-_BASE_URL   = pcfg.get("base_url") or gcfg.base_url
-MODEL       = pcfg.get("model") or gcfg.default_model
-MAX_TOKENS  = 4000
 _SYSTEM_NAME = cfg.get_project_config().get("system_name", "业务系统")
 
 SKIP_DOMAINS = cfg.get_skip_domains()
@@ -61,25 +54,6 @@ def read_doc_content(fpath: Path, max_chars: int = 3000) -> str:
         return text.strip()[:max_chars]
     except Exception:
         return ""
-
-def call_claude(client, prompt: str) -> str:
-    for attempt in range(3):
-        try:
-            resp = client.messages.create(
-                model=MODEL, max_tokens=MAX_TOKENS,
-                messages=[{"role": "user",
-                           "content": prompt.encode("utf-8", "replace").decode("utf-8")}]
-            )
-            # 兼容 ThinkingBlock（某些模型会返回 thinking + text）
-            for block in resp.content:
-                if block.type == "text":
-                    return block.text
-            raise RuntimeError("API 返回内容中未找到 text 块")
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-            else:
-                raise
 
 # ── Prompt ────────────────────────────────────────────────────────────────────
 
@@ -295,7 +269,7 @@ def read_child_processes(domain: str) -> dict:
 
 # ── PROCESSES.md 生成 ────────────────────────────────────────────────────────
 
-def gen_processes_md(client, domain: str, is_parent: bool) -> str:
+def gen_processes_md(domain: str, is_parent: bool) -> str:
     parent = cfg.get_parent_domain(domain)
     domain_dir = DOMAINS_DIR / domain
 
@@ -312,7 +286,7 @@ def gen_processes_md(client, domain: str, is_parent: bool) -> str:
     prompt = build_prompt(domain, domain_dir, is_parent, child_processes, docs_summary, parent)
 
     # 4. 调用 AI
-    ai_content = call_claude(client, prompt).strip()
+    ai_content = call_llm(prompt, max_tokens=4000).strip()
 
     # 5. 清理 AI 输出，丢弃 AI 自带的 header（到 ## 目录 之前的所有内容）
     # AI 按模板输出时，会在 ## 目录 之前生成标题/引用行/分隔线，这些都丢弃
@@ -362,9 +336,6 @@ def main():
     parser.add_argument("--force",  action="store_true", help="强制重新生成")
     args = parser.parse_args()
 
-    client = (anthropic.Anthropic(api_key=_AUTH_TOKEN, base_url=_BASE_URL)
-              if _BASE_URL else anthropic.Anthropic())
-
     if args.domain:
         domain_dir = DOMAINS_DIR / args.domain
         if not domain_dir.exists():
@@ -379,7 +350,7 @@ def main():
 
         log(f"生成: {args.domain} (类型: {'父域' if is_parent else '子域'})")
         try:
-            content = gen_processes_md(client, args.domain, is_parent)
+            content = gen_processes_md(args.domain, is_parent)
             pf.write_text(content, encoding="utf-8")
             log(f"  -> {args.domain}/PROCESSES.md")
         except Exception as e:
@@ -411,14 +382,12 @@ def main():
 
     def _process_one(domain_path: str, is_parent: bool) -> bool:
         nonlocal done, errs
-        worker_client = (anthropic.Anthropic(api_key=_AUTH_TOKEN, base_url=_BASE_URL)
-                         if _BASE_URL else anthropic.Anthropic())
         domain_dir = DOMAINS_DIR / domain_path
         domain_dir.mkdir(parents=True, exist_ok=True)
         try:
             with log_lock:
                 log(f"  生成: {domain_path} ({'父域' if is_parent else '子域'})")
-            content = gen_processes_md(worker_client, domain_path, is_parent)
+            content = gen_processes_md(domain_path, is_parent)
             pf = domain_dir / "PROCESSES.md"
             pf.write_text(content, encoding="utf-8")
             with log_lock:

@@ -22,15 +22,14 @@
   python gen_domain_overview.py --force            # 强制重新生成
   python gen_domain_overview.py --init-dirs        # 仅初始化域目录
 """
-import os, sys, re, json, time, argparse
+import os, sys, re, json, argparse
 sys.stdout.reconfigure(encoding='utf-8')
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
-import anthropic
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tools import config_loader as cfg
+from tools.config_loader import call_llm
 from tools.text_utils import parse_frontmatter
 
 # ── 路径配置（从配置文件加载）─────────────────────────────────────────────────
@@ -41,12 +40,6 @@ REPOS       = cfg.get_repos_dir()
 SCHEMA_IDX  = cfg.get_schema_index_path()
 TODAY       = datetime.now().strftime("%Y-%m-%d")
 
-gcfg        = cfg.get_global_config()
-pcfg        = cfg.get_project_config()
-_AUTH_TOKEN = pcfg.get("api_key") or gcfg.api_key
-_BASE_URL   = pcfg.get("base_url") or gcfg.base_url
-MODEL       = pcfg.get("model") or gcfg.default_model
-MAX_TOKENS  = 3000
 _SYSTEM_NAME = cfg.get_project_config().get("system_name", "业务系统")
 
 # ── 域映射（从配置文件加载）──────────────────────────────────────────────────
@@ -98,24 +91,6 @@ def get_doc_title(fpath: Path) -> str:
         return parse_frontmatter(text).get("title", fpath.stem)
     except Exception:
         return fpath.stem
-
-def call_claude(client, prompt: str) -> str:
-    for attempt in range(3):
-        try:
-            resp = client.messages.create(
-                model=MODEL, max_tokens=MAX_TOKENS,
-                messages=[{"role": "user",
-                           "content": prompt.encode("utf-8", "replace").decode("utf-8")}]
-            )
-            for block in resp.content:
-                if hasattr(block, 'text'):
-                    return block.text
-            return resp.content[0].text
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-            else:
-                raise
 
 # ── 数据库表结构（从 schema_index.json 读取）─────────────────────────────────
 
@@ -372,7 +347,7 @@ def prune_empty_domains() -> list[str]:
     return pruned
 
 
-def gen_domain_readme(client, domain: str) -> None:
+def gen_domain_readme(domain: str) -> None:
     # domain 是域路径字符串，如 "合同管理" 或 "物流订单/订舱管理"
     domain_dir = DOMAINS_DIR / domain
 
@@ -409,7 +384,7 @@ def gen_domain_readme(client, domain: str) -> None:
         code_module_summary="\n\n".join(code_summaries)[:3000] or "（无代码模块说明）",
         doc_titles="\n".join(doc_titles_lines)[:1500] or "（无文档）",
     )
-    ai_content = call_claude(client, prompt).strip()
+    ai_content = call_llm(prompt, max_tokens=3000).strip()
     ai_content = re.sub(r'^#\s+.+\n', '', ai_content).lstrip()
 
     # 4. 后端代码模块
@@ -516,16 +491,13 @@ def main():
         log("层级域目录初始化完成")
         return
 
-    client = (anthropic.Anthropic(api_key=_AUTH_TOKEN, base_url=_BASE_URL)
-              if _BASE_URL else anthropic.Anthropic())
-
     if args.domain:
         domain_dir = DOMAINS_DIR / args.domain
         if not domain_dir.exists():
             domain_dir.mkdir(parents=True, exist_ok=True)
         log(f"生成: {args.domain}")
         try:
-            gen_domain_readme(client, args.domain)
+            gen_domain_readme(args.domain)
         except Exception as e:
             log(f"  [失败] {args.domain}: {e}")
         return
@@ -546,7 +518,7 @@ def main():
             continue
         log(f"  [{i}/{len(target_domains)}] 生成: {domain}")
         try:
-            gen_domain_readme(client, domain)
+            gen_domain_readme(domain)
         except Exception as e:
             log(f"    [失败] {domain}: {e}")
 

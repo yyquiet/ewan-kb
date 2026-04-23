@@ -66,13 +66,30 @@ def _is_valid_segment(seg: str) -> bool:
 
 
 def _find_domain_segment(parts: list[str]) -> str | None:
+    """从包路径片段中提取路径型 segment（如 order/payment）。
+
+    遍历规则：
+    - package_wrappers（rest, feign 等）：跳过，继续往后找
+    - generic_noise（info, detail 等）：跳过，继续往后找
+    - segment_stopwords（service, controller 等）：如果已有有效词则终止，否则跳过
+    - 其他无效格式（长度 ≤ 2、纯数字等）：跳过
+    - 有效业务词：收集
+    """
+    segments: list[str] = []
     for p in parts:
-        if p in _PACKAGE_WRAPPERS:
+        low = p.lower()
+        if low in _PACKAGE_WRAPPERS or low in _GENERIC_NOISE:
             continue
-        if not _is_valid_segment(p):
+        if low in _SEGMENT_STOPWORDS:
+            if segments:
+                break  # 已有业务词后遇到技术层，终止
             continue
-        return p.lower()
-    return None
+        if "." in low or low.isdigit() or len(low) <= 2:
+            continue
+        segments.append(low)
+        if len(segments) >= 3:
+            break
+    return "/".join(segments) if segments else None
 
 
 def _infer_segment_from_classname(stem: str) -> str | None:
@@ -149,7 +166,7 @@ def scan_java_domains(repos_dir: Path) -> dict[str, dict]:
         except (OSError, UnicodeDecodeError):
             continue
 
-        if seg_found and _is_valid_segment(seg_found):
+        if seg_found:
             segment_files[seg_found] += 1
             if len(segment_samples[seg_found]) < 5:
                 segment_samples[seg_found].append(path_str.split("/repos/")[-1] if "/repos/" in path_str else java_file.name)
@@ -395,12 +412,9 @@ _AI_PROMPT = """\
 def ai_refine_domains(
     segments: dict[str, dict],
     doc_titles: list[str],
-    api_key: str,
-    base_url: str = "",
-    model: str = "claude-haiku-4-5-20251001",
 ) -> list[dict]:
     """用 AI 单次调用，将英文 segments 转为中文域名并做合并/拆分。"""
-    import anthropic
+    from tools.config_loader import call_llm
 
     # 构建 segments 描述
     lines = []
@@ -418,20 +432,9 @@ def ai_refine_domains(
         doc_titles_text=doc_titles_text,
     )
 
-    client = anthropic.Anthropic(api_key=api_key, base_url=base_url or None)
-    resp = client.messages.create(
-        model=model,
-        max_tokens=16384,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = ""
-    for block in resp.content:
-        if hasattr(block, 'text'):
-            text = block.text.strip()
-            if text:
-                break
+    text = call_llm(prompt, max_tokens=16384)
     if not text:
-        raise ValueError("AI 返回无 text 内容（可能全是 ThinkingBlock）")
+        raise ValueError("AI 返回空内容")
 
     # 提取 JSON
     m = re.search(r"```json\s*\n(.*?)\n\s*```", text, re.DOTALL)
@@ -585,20 +588,12 @@ def discover(kb_dir: Path, use_ai: bool = True) -> dict:
     if use_ai:
         try:
             from tools import config_loader as cfg
-            pcfg = cfg.get_project_config()
             gcfg = cfg.get_global_config()
-            api_key = pcfg.get("api_key") or gcfg.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-            base_url = pcfg.get("base_url") or gcfg.base_url
-            model = pcfg.get("model") or gcfg.default_model
+            api_key = gcfg.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
             if api_key:
                 print("发现域: AI 微调中（中文命名 + 合并/拆分）...")
                 doc_titles = scan_doc_titles(docs_dir)
-                ai_domains = ai_refine_domains(
-                    segments, doc_titles,
-                    api_key=api_key,
-                    base_url=base_url,
-                    model=model,
-                )
+                ai_domains = ai_refine_domains(segments, doc_titles)
                 print(f"  AI 输出 {len(ai_domains)} 个域")
             else:
                 print("  ⚠ 无 API key，跳过 AI 微调")

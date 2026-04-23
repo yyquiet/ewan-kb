@@ -303,6 +303,86 @@ def create_project_config(target_dir: Path, project_name: str) -> dict:
     return config
 
 
+# ── LLM 统一调用层 ──────────────────────────────────────────────────────────
+
+def _resolve_llm_config() -> dict:
+    """从 project_config + global_config 解析 LLM 配置。"""
+    pcfg = get_project_config()
+    gcfg = get_global_config()
+    return {
+        "api_key": pcfg.get("api_key") or gcfg.api_key,
+        "base_url": pcfg.get("base_url") or gcfg.base_url,
+        "model": pcfg.get("model") or gcfg.default_model,
+        "protocol": pcfg.get("api_protocol", "anthropic"),  # "anthropic" or "openai"
+    }
+
+
+def create_llm_client():
+    """创建 LLM 客户端（根据 api_protocol 自动选择 Anthropic 或 OpenAI SDK）。"""
+    c = _resolve_llm_config()
+    if c["protocol"] == "openai":
+        from openai import OpenAI
+        return OpenAI(api_key=c["api_key"], base_url=c["base_url"] or None)
+    else:
+        import anthropic
+        return anthropic.Anthropic(api_key=c["api_key"], base_url=c["base_url"] or None)
+
+
+def get_llm_model() -> str:
+    """返回当前配置的模型名称。"""
+    return _resolve_llm_config()["model"]
+
+
+def get_llm_protocol() -> str:
+    """返回当前 API 协议类型：'anthropic' 或 'openai'。"""
+    return _resolve_llm_config()["protocol"]
+
+
+def call_llm(prompt: str, *, max_tokens: int = 4096, client=None) -> str:
+    """统一 LLM 调用入口，自动适配 Anthropic / OpenAI 协议。
+
+    Args:
+        prompt: 用户 prompt 文本
+        max_tokens: 最大输出 token 数
+        client: 可选，复用已有客户端（多线程场景各线程自建 client 传入）
+    """
+    import time
+
+    c = _resolve_llm_config()
+    model = c["model"]
+    protocol = c["protocol"]
+    if client is None:
+        client = create_llm_client()
+
+    clean_prompt = prompt.encode("utf-8", errors="replace").decode("utf-8")
+
+    for attempt in range(3):
+        try:
+            if protocol == "openai":
+                resp = client.chat.completions.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    messages=[{"role": "user", "content": clean_prompt}],
+                )
+                return resp.choices[0].message.content
+            else:
+                resp = client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    messages=[{"role": "user", "content": clean_prompt}],
+                )
+                for block in resp.content:
+                    if hasattr(block, "text"):
+                        return block.text
+                return resp.content[0].text
+        except Exception:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+            else:
+                raise
+    return ""
+
+
 def ensure_domain_dirs(domains_dir: Path, doc_types: list[str] | None = None) -> None:
     """Ensure domain root directories exist under domains_dir.
 

@@ -19,7 +19,6 @@
 import os
 import sys
 import json
-import time
 import re
 import argparse
 import threading
@@ -28,13 +27,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-import anthropic
-
 # ============================================================
 # 配置加载（从新架构的 config_loader.py 读取）
 # ============================================================
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tools import config_loader as cfg
+from tools.config_loader import call_llm
 
 BASE_DIR       = cfg.get_kb_dir()
 SOURCE_DIR     = cfg.get_source_dir()
@@ -43,39 +41,6 @@ KNOWLEDGE_BASE = cfg.get_knowledge_base_dir()
 PROGRESS_FILE  = cfg.get_knowledge_base_dir() / "_state/progress.json"
 ERRORS_FILE    = cfg.get_knowledge_base_dir() / "_state/errors.json"
 LOG_FILE       = cfg.get_knowledge_base_dir() / "_state/extract.log"
-
-# NOTE: _AUTH_TOKEN and _BASE_URL are evaluated lazily at runtime,
-# not at module import time, to support subprocess invocation via ewankb CLI.
-# Use the getter functions below instead of the module-level vars directly.
-
-MAX_RETRIES = 3
-RETRY_BASE  = 2   # 退避基数（秒），实际等待 2^attempt 秒
-
-
-def _get_auth_token() -> str:
-    pcfg = cfg.get_project_config()
-    if pcfg.get("api_key"):
-        return pcfg["api_key"]
-    return cfg.get_global_config().api_key
-
-
-def _get_base_url() -> str:
-    pcfg = cfg.get_project_config()
-    if pcfg.get("base_url"):
-        return pcfg["base_url"]
-    return cfg.get_global_config().base_url
-
-
-def _get_model() -> str:
-    pcfg = cfg.get_project_config()
-    if pcfg.get("model"):
-        return pcfg["model"]
-    return cfg.get_global_config().default_model
-
-
-def _get_max_tokens() -> int:
-    return cfg.get_global_config().extraction_max_tokens
-
 
 def _get_parallel_workers() -> int:
     return cfg.get_global_config().parallel_workers
@@ -274,41 +239,6 @@ def get_output_path(biz_domain: str, doc_type: str, page_id: str, title_slug: st
     return domain_type_dir / f"{page_id}_{safe_slug}.md"
 
 
-def call_claude(client: anthropic.Anthropic, prompt: str) -> str:
-    """调用 Claude API，带重试逻辑。"""
-    # 去除 emoji 等 BMP 以外字符，避免 GBK 编码问题
-    clean_prompt = prompt.encode("utf-8", errors="replace").decode("utf-8")
-    for attempt in range(MAX_RETRIES):
-        try:
-            resp = client.messages.create(
-                model=_get_model(),
-                max_tokens=_get_max_tokens(),
-                messages=[{"role": "user", "content": clean_prompt}]
-            )
-            # Find first TextBlock (skip ThinkingBlock etc.)
-            for block in resp.content:
-                if hasattr(block, 'text'):
-                    return block.text
-            # Fallback: try first block anyway
-            return resp.content[0].text
-        except anthropic.RateLimitError:
-            if attempt < MAX_RETRIES - 1:
-                wait = RETRY_BASE ** (attempt + 2)
-                time.sleep(wait)
-            # Silent retry - don't log from worker threads
-        except anthropic.APIStatusError:
-            if attempt < MAX_RETRIES - 1:
-                wait = RETRY_BASE ** (attempt + 1)
-                time.sleep(wait)
-            # Silent retry
-        except Exception:
-            if attempt < MAX_RETRIES - 1:
-                wait = RETRY_BASE ** (attempt + 1)
-                time.sleep(wait)
-            # Silent retry
-    raise RuntimeError("超过最大重试次数")
-
-
 def clean_output(output: str) -> str:
     """清理 AI 输出：去掉 frontmatter 外的 ```yaml 代码块包裹。"""
     output = output.strip()
@@ -424,9 +354,6 @@ def _process_one(item: dict, client, today: str) -> dict:
     doc_type   = item["doc_type"]
     biz_domain = item["biz_domain"]
 
-    # 每个 worker 用独立 client 连接
-    worker_client = anthropic.Anthropic(api_key=_get_auth_token(), base_url=_get_base_url() or None)
-
     fpath = get_source_dir() / fname
     raw = fpath.read_text(encoding="utf-8")
     content = raw[:8000] if len(raw) > 8000 else raw
@@ -441,7 +368,7 @@ def _process_one(item: dict, client, today: str) -> dict:
     )
 
     try:
-        output = clean_output(call_claude(worker_client, prompt))
+        output = clean_output(call_llm(prompt, max_tokens=cfg.get_global_config().extraction_max_tokens))
         actual_domain  = extract_domain_from_output(output, biz_domain or "待分类")
         actual_doctype = extract_doctype_from_output(output, doc_type or "其他")
         title          = extract_title_from_output(output, name)

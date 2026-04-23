@@ -90,6 +90,7 @@ def main() -> None:
     pf_p.add_argument("--dir", type=str, help="Target knowledge base directory (default: .)")
 
     sub.add_parser("diff", help="Detect source changes and show affected domains")
+    sub.add_parser("rebuild", help="Delete all generated artifacts (domains/, knowledgeBase/, graph/, source/.cache/) for a clean rebuild")
     sub.add_parser("install", help="Install ewankb skills to Claude Code")
 
     cfg_p = sub.add_parser("config", help="Manage project configuration")
@@ -131,6 +132,8 @@ def main() -> None:
             cmd_preflight(args)
         elif args.command == "diff":
             cmd_diff()
+        elif args.command == "rebuild":
+            cmd_rebuild()
         elif args.command == "install":
             cmd_install()
         elif args.command == "config":
@@ -247,6 +250,31 @@ def cmd_diff() -> None:
 
     # Output JSON for programmatic use
     print(f"\n[JSON] {json.dumps(result, ensure_ascii=False)}")
+
+
+def cmd_rebuild() -> None:
+    """Delete all generated artifacts for a clean rebuild."""
+    import shutil
+    kb_dir = _resolve_kb_dir()
+
+    targets = [
+        kb_dir / "domains",
+        kb_dir / "knowledgeBase",
+        kb_dir / "graph",
+        kb_dir / "source" / ".cache",
+    ]
+
+    removed = []
+    for t in targets:
+        if t.exists():
+            shutil.rmtree(t)
+            removed.append(str(t.relative_to(kb_dir)))
+
+    if removed:
+        print(f"已清理: {', '.join(removed)}")
+    else:
+        print("无需清理（目录均不存在）。")
+    print("可以重新运行 ewankb build 进行全量构建。")
 
 
 def cmd_discover() -> None:
