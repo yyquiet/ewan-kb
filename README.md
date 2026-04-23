@@ -70,7 +70,7 @@ ewankb install          # 安装 Claude Code skills
 
 ### 消费者
 
-消费者只需克隆已构建好的知识库，配置 LLM API 凭证后即可查询。
+消费者只需克隆已构建好的知识库，创建 `llm_config.json` 并填入 LLM API 凭证后即可查询。
 
 ```bash
 # 1. 安装
@@ -81,11 +81,21 @@ ewankb install          # 安装 Claude Code skills
 git clone <知识库地址> my-kb
 cd my-kb
 
-# 3. 开始查询
+# 3. 创建 llm_config.json
+cat > llm_config.json << 'EOF'
+{
+  "api_key": "your-api-key-here",
+  "base_url": "",
+  "model": "claude-haiku-4-5-20251001",
+  "api_protocol": "anthropic"
+}
+EOF
+
+# 4. 开始查询
 /ewankb-query <问题>
 ```
 
-> 首次查询时，skill 会自动检测 `llm_config.json` 是否存在，如缺失会引导你创建并填入 API Key。
+> 如使用 Claude Code，首次查询时 skill 也会自动检测并引导创建。手动创建可跳过这一步。模板文件见 `examples/llm_config.example.json`。
 
 | 命令 | 说明 |
 |------|------|
