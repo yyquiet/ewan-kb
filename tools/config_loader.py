@@ -372,9 +372,12 @@ def call_llm(prompt: str, *, max_tokens: int = 4096, client=None) -> str:
                     messages=[{"role": "user", "content": clean_prompt}],
                 )
                 for block in resp.content:
-                    if hasattr(block, "text"):
+                    if getattr(block, "type", None) == "text":
                         return block.text
-                return resp.content[0].text
+                for block in resp.content:
+                    if getattr(block, "type", None) != "thinking" and hasattr(block, "text"):
+                        return block.text
+                return ""
         except Exception:
             if attempt < 2:
                 time.sleep(2 ** attempt)
