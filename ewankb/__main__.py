@@ -18,6 +18,7 @@ Usage:
     ewankb communities          Show detected communities
     ewankb surprising           Show surprising cross-domain connections
     ewankb config --edit        Edit project_config.json
+    ewankb config --edit-llm    Edit llm_config.json (API credentials)
 """
 from __future__ import annotations
 
@@ -95,6 +96,7 @@ def main() -> None:
 
     cfg_p = sub.add_parser("config", help="Manage project configuration")
     cfg_p.add_argument("--edit", action="store_true", help="Edit project_config.json")
+    cfg_p.add_argument("--edit-llm", action="store_true", help="Edit llm_config.json (API credentials)")
     cfg_p.add_argument("--show", action="store_true", help="Show current config")
 
     args = parser.parse_args()
@@ -178,7 +180,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "knowledgeBase/_state/\n\n"
         "# Environment and config (contains API keys)\n"
         ".env\n"
-        "project_config.json\n",
+        "llm_config.json\n",
         encoding="utf-8",
     )
 
@@ -186,15 +188,16 @@ def cmd_init(args: argparse.Namespace) -> None:
     sys.path.insert(0, str(EWANKB_ROOT))
     from tools.config_loader import create_project_config
     create_project_config(kb_dir, args.name)
-    print(f"  Created project_config.json")
+    print(f"  Created project_config.json + llm_config.json")
 
     print(f"\nCreated {kb_dir}/")
     print(f"Next steps:")
     print(f"  1. cd {kb_dir}")
-    print(f"  2. Place backend Java code in source/repos/")
-    print(f"  3. Place .md documents in source/docs/ (optional)")
-    print(f"  4. ewankb build")
-    print(f"  5. ewankb query 'your question'")
+    print(f"  2. Edit llm_config.json — fill in your API key (see examples/llm_config.example.json)")
+    print(f"  3. Place backend Java code in source/repos/")
+    print(f"  4. Place .md documents in source/docs/ (optional)")
+    print(f"  5. ewankb build")
+    print(f"  6. ewankb query 'your question'")
     print(f"")
     print(f"Directory structure:")
     print(f"  source/         Raw materials (code + docs)")
@@ -470,6 +473,7 @@ def cmd_preflight(args: argparse.Namespace) -> None:
     # ── Directory checks ──
     dir_checks = {
         "project_config": target / "project_config.json",
+        "llm_config": target / "llm_config.json",
         "source": target / "source",
         "source_repos": target / "source" / "repos",
         "source_docs": target / "source" / "docs",
@@ -489,18 +493,19 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         for key, path in dir_checks.items():
             result["dirs"][key] = path.exists()
 
-        # Create project_config.json if missing
+        # Create project_config.json + llm_config.json if missing
         cfg_path = target / "project_config.json"
-        if not cfg_path.exists():
+        llm_path = target / "llm_config.json"
+        if not cfg_path.exists() or not llm_path.exists():
             sys.path.insert(0, str(EWANKB_ROOT))
             from tools.config_loader import create_project_config
-            config = create_project_config(target, f"{target.name}业务知识库")
+            create_project_config(target, f"{target.name}业务知识库")
             result["dirs"]["project_config"] = True
+            result["dirs"]["llm_config"] = True
             result["config_created"] = True
             result["config_values"] = {
-                "api_key_preview": (config["api_key"][:8] + "...") if config["api_key"] else "(empty)",
-                "base_url": config["base_url"] or "(default: api.anthropic.com)",
-                "model": config["model"],
+                "base_url": gcfg.base_url or "(default: api.anthropic.com)",
+                "model": gcfg.default_model,
             }
 
     # ── File counts ──
@@ -515,17 +520,19 @@ def cmd_preflight(args: argparse.Namespace) -> None:
     sys.path.insert(0, str(EWANKB_ROOT))
     try:
         os.environ["EWANKB_DIR"] = str(target)
-        from tools.config_loader import get_global_config, get_project_config
+        from tools.config_loader import get_global_config, get_project_config, get_llm_config
         # Reset cached config so it reads from target dir
         import tools.config_loader as _cfg_mod
         _cfg_mod._global_cfg = None
         _cfg_mod._project_cfg = None
+        _cfg_mod._llm_cfg = None
 
         gcfg = get_global_config()
+        llm = get_llm_config()
         pcfg = get_project_config()
-        api_key = pcfg.get("api_key") or gcfg.api_key
-        base_url = pcfg.get("base_url") or gcfg.base_url
-        model = pcfg.get("model") or gcfg.default_model
+        api_key = llm.get("api_key") or pcfg.get("api_key") or gcfg.api_key
+        base_url = llm.get("base_url") or pcfg.get("base_url") or gcfg.base_url
+        model = llm.get("model") or pcfg.get("model") or gcfg.default_model
         result["api"] = {
             "key_configured": bool(api_key),
             "key_preview": (api_key[:8] + "...") if api_key else "",
@@ -561,6 +568,8 @@ def cmd_preflight(args: argparse.Namespace) -> None:
             blockers.append(f"no_{required_dir}")
     if not result["dirs"]["project_config"]:
         blockers.append("no_project_config")
+    if not result["dirs"]["llm_config"]:
+        blockers.append("no_llm_config")
     if result["counts"]["java_files"] == 0:
         blockers.append("no_java_files")
     if not result["api"].get("key_configured"):
@@ -700,8 +709,12 @@ def cmd_config(args: argparse.Namespace) -> None:
     """Show or edit project config."""
     kb_dir = _resolve_kb_dir()
     config_file = kb_dir / "project_config.json"
+    llm_file = kb_dir / "llm_config.json"
 
-    if args.edit:
+    if getattr(args, 'edit_llm', False):
+        editor = os.environ.get("EDITOR", "notepad" if os.name == "nt" else "vim")
+        os.system(f'"{editor}" "{llm_file}"')
+    elif args.edit:
         editor = os.environ.get("EDITOR", "notepad" if os.name == "nt" else "vim")
         os.system(f'"{editor}" "{config_file}"')
     elif args.show:

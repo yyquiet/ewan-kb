@@ -56,7 +56,7 @@ ewankb preflight --dir .
 ewankb query "用户问题"
 ```
 
-如果 `ewankb` 命令不可用，改用 `PYTHONPATH="$EWANKB_ROOT" python -m ewankb query "..."` 形式。
+如果 `ewankb` 命令不可用，请先运行 `pip install ewankb`。
 
 解读结果并回答。回答末尾附建议："想看原文？试 `/ewankb-query kb \"同一问题\"`"
 

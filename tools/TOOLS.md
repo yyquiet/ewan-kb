@@ -41,5 +41,6 @@ source/           ──discover──→  domains/         ──extract+enrich
 | 文件 | 作用 |
 |------|------|
 | `~/.config/ewankb/ewankb.toml` | 全局默认配置 |
-| `project_config.json` | 项目配置（域定义、分类规则） |
+| `project_config.json` | 项目元数据（域定义、分类规则，提交 git） |
+| `llm_config.json` | LLM 凭证（API Key / Base URL / Model，不提交 git） |
 | `config_loader.py` | 配置加载器 |

@@ -6,7 +6,7 @@
 从后端 Java 代码的 package 结构自动发现业务域，用 AI 做文档微调（合并/拆分/中文命名），
 写入 domains/_meta/domains.json。
 
-这是域的唯一生成来源，project_config.json 中不配置域。
+段发现停用词从 project_config.json 的 segment_stopwords 字段读取，项目级配置完全覆盖内置默认值。
 
 用法：
   python -m tools.discover.discover_domains          # 自动发现
@@ -26,28 +26,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-# ── Stopwords（从 segment_stopwords.json + extends 加载）──────────────────────
+# ── Stopwords（从 project_config.json 读取）──────────────────────────────
 
 def _load_stopwords() -> tuple[frozenset, frozenset, frozenset]:
-    base_path = Path(__file__).resolve().parent / "segment_stopwords.json"
-    data = json.loads(base_path.read_text(encoding="utf-8"))
-
-    # 加载用户扩展词表（构建者本地自定义，不提交 git）
-    extends_path = base_path.parent / "segment_stopwords_extends.json"
-    if extends_path.exists():
-        try:
-            ext = json.loads(extends_path.read_text(encoding="utf-8"))
-            for key in ("segment_stopwords", "package_wrappers", "generic_noise"):
-                if key in ext and "words" in ext[key]:
-                    data[key]["words"].extend(ext[key]["words"])
-        except (json.JSONDecodeError, KeyError):
-            pass
-
-    return (
-        frozenset(data["segment_stopwords"]["words"]),
-        frozenset(data["package_wrappers"]["words"]),
-        frozenset(data["generic_noise"]["words"]),
-    )
+    from tools.config_loader import get_segment_stopwords
+    return get_segment_stopwords()
 
 _SEGMENT_STOPWORDS, _PACKAGE_WRAPPERS, _GENERIC_NOISE = _load_stopwords()
 

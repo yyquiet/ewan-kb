@@ -28,25 +28,27 @@ source/          →  domains/           →  knowledgeBase/     →  graph/
 (原始数据)         (域组织 + AI 产物)     (最终知识库)           (可查询图谱)
 ```
 
-| 层 | 职责 | 产物 | Git 提交 |
-|----|------|------|----------|
-| `source/` | 存放原始代码和文档 | Java 代码、.md 文档 | 是 |
-| `domains/` | 按业务域组织，存放 extract 输出 + AI 生成的概览和流程 | README.md、PROCESSES.md、代码模块说明/、各类型文档/ | 是 |
-| `knowledgeBase/` | 最终知识库，按文档类型平铺 | .md 文档（从 domains/ 迁移） | 是 |
-| `graph/` | 知识图谱（AST + 语义） | graph.json、communities、统计 | 是 |
+| 层 | 职责 | 产物 |
+|----|------|------|
+| `source/` | 存放原始代码和文档 | Java 代码、.md 文档 |
+| `domains/` | 按业务域组织，存放 extract 输出 + AI 生成的概览和流程 | README.md、PROCESSES.md、代码模块说明/、各类型文档/ |
+| `knowledgeBase/` | 最终知识库，按文档类型平铺 | .md 文档（从 domains/ 迁移） |
+| `graph/` | 知识图谱（AST + 语义） | graph.json、communities、统计 |
+
+> 知识库本身是一个 git 仓库。以上四层产物全部提交到远程仓库，消费者 clone 后即可查询。`source/` 在 ewan-kb **工具仓库**中被 gitignore（避免把工具源码混入），但在**知识库仓库**中正常提交。
 
 ## 使用方式
 
 知识库有两类用户角色：
 
-- **构建者**：负责搭建和维护知识库的人（通常是熟悉系统代码和业务的研发），使用 `/ewankb` 执行构建、更新、推送等操作
-- **消费者**：需要查询业务知识的人（研发、产品、测试、新人等），使用 `/ewankb-query` 直接提问，无需了解构建过程
+- **构建者**：负责搭建和维护知识库的人（通常是熟悉系统代码和业务的研发），使用 `/ewankb` 执行构建、更新、推送等操作。需要配置 `llm_config.json`（LLM API 凭证）。
+- **消费者**：需要查询业务知识的人（研发、产品、测试、新人等），使用 `/ewankb-query` 直接提问。clone 知识库后需自行创建 `llm_config.json`，无需了解构建过程。
 
-这样划分是因为构建过程需要代码和文档的写入权限、LLM API 配置、以及对业务域映射的理解；而消费者只需要一个已构建好的知识库（通过 git clone 获取）即可开始查询。
+这样划分是因为构建过程需要代码和文档的写入权限、LLM API 配置、以及对业务域映射的理解；而消费者只需要一个已构建好的知识库（通过 git clone 获取）+ 自己的 LLM API 凭证即可开始查询。
 
 ### 构建者（/ewankb）
 
-**前置条件**：Claude Code + ewankb skill 已安装。
+**前置条件**：`pip install ewankb` + `ewankb install`（安装 Claude Code skills）+ 配置 `llm_config.json`（LLM API 凭证）。
 
 **首次构建**：
 
@@ -54,7 +56,7 @@ source/          →  domains/           →  knowledgeBase/     →  graph/
 /ewankb <知识库路径>
 ```
 
-执行完整流程：preflight → discover → 模块映射 → knowledgebase → build-graph。
+执行完整流程：preflight（自动创建 `project_config.json` + `llm_config.json`）→ discover → 模块映射 → knowledgebase → build-graph。首次运行后需编辑 `llm_config.json` 填入 API Key。
 
 **增量构建**：
 
@@ -79,7 +81,19 @@ source/          →  domains/           →  knowledgeBase/     →  graph/
 
 ### 消费者（/ewankb-query）
 
-无需构建，直接查询已构建好的知识库。
+消费者通过 git clone 获取已构建好的知识库后，需要创建自己的 `llm_config.json`（存放 LLM API 凭证），然后即可查询。
+
+```bash
+# 1. 克隆知识库
+git clone <知识库地址> my-kb
+cd my-kb
+
+# 2. 创建 llm_config.json（首次使用，模板见 examples/llm_config.example.json）
+ewankb preflight --fix --dir .
+# 然后编辑 llm_config.json，填入你的 API Key 等凭证
+
+# 3. 开始查询
+```
 
 | 命令 | 说明 |
 |------|------|
@@ -129,25 +143,34 @@ source/          →  domains/           →  knowledgeBase/     →  graph/
 
 ## 关键配置项
 
-### project_config.json
+### project_config.json（项目元数据，提交 git）
 
 | 字段 | 说明 |
 |------|------|
 | `project_name` | 项目中文名（如"国际物流业务知识库"） |
 | `system_name` | 系统名称，用于 AI prompt（如"国际物流系统"） |
-| `api_key` | LLM API Key |
-| `base_url` | LLM API Base URL（留空使用 Anthropic 官方） |
-| `model` | 模型名称（默认 claude-haiku-4-5-20251001） |
 | `doc_type_rules` | 文档类型识别规则（类型名 + 关键词列表） |
 | `code_structure` | 代码仓库目录约定（java_package_prefix 等） |
 | `skip_domains` | 跳过不生成概览的域列表 |
 | `skip_doc_types_for_enrich` | enrich 阶段跳过的文档类型 |
 | `system_fields` | DB schema 提取时过滤的通用系统字段 |
 | `extraction_prompts` | 各文档类型的自定义提炼 prompt |
+| `segment_stopwords` | 域发现停用词表（初始化时从内置默认值写入，项目级完全覆盖） |
 
-### segment_stopwords.json（域发现词表）
+### llm_config.json（LLM 凭证，不提交 git）
 
-位于 `tools/discover/segment_stopwords.json`，控制从 Java 包路径中提取业务 segment 的行为：
+| 字段 | 说明 |
+|------|------|
+| `api_key` | LLM API Key |
+| `base_url` | LLM API Base URL（留空使用 Anthropic 官方） |
+| `model` | 模型名称（默认 claude-haiku-4-5-20251001） |
+| `api_protocol` | API 协议类型：`anthropic` 或 `openai` |
+
+> 每位使用者需要创建自己的 `llm_config.json` 并填入 API 凭证。`project_config.json` 随知识库提交到 git，团队共享。`llm_config.json` 模板见 `examples/llm_config.example.json`。
+
+### 域发现停用词表
+
+`project_config.json` 中的 `segment_stopwords` 字段控制从 Java 包路径中提取业务 segment 的行为：
 
 | 词表 | 作用 | 示例 |
 |------|------|------|
@@ -157,7 +180,7 @@ source/          →  domains/           →  knowledgeBase/     →  graph/
 
 提取逻辑：逐个检查包路径片段，跳过在停用词表中的词，第一个不在任何表中的词即为 segment。
 
-`segment_stopwords.json` 由 ewan-kb 维护，包含通用的技术词汇。构建者如需添加项目特有的停用词（如内部项目代号、公司包名），可编辑同目录下的 `segment_stopwords_extends.json`（格式相同，不提交 git）。
+`ewankb init` 时会将内置默认词表写入 `project_config.json`。项目级配置完全覆盖默认值——直接编辑 `segment_stopwords` 字段增删词即可。旧版 `project_config.json`（不含 `segment_stopwords` 字段）在首次运行 discover 时会自动将默认词表补写到文件中。
 
 ### source/repos/repos.json（可选）
 
@@ -192,8 +215,9 @@ Confluence 文档自动拉取配置。内置爬虫会递归抓取指定根页面
 
 ```
 my-knowledge-base/
-├── project_config.json          # 项目配置（构建者使用，不提交 git）
-├── source/                      # 原始数据（只读）
+├── project_config.json          # 项目元数据（提交 git）
+├── llm_config.json              # LLM 凭证（不提交 git，每人自行创建）
+├── source/                      # 原始数据
 │   ├── repos/                   # 代码仓库
 │   │   ├── repos.json           # git 拉取配置（可选）
 │   │   └── my-service/          # 代码目录
@@ -231,15 +255,27 @@ my-knowledge-base/
 ## 安装
 
 ```bash
-# 从源码安装
-cd Ewan-kb
-pip install -e .
+# 从 PyPI 安装
+pip install ewankb
+
+# 安装 Claude Code skills（构建者必做）
+ewankb install
 
 # 验证
 ewankb --help
 ```
 
-依赖：Python 3.10+、graphify、anthropic SDK、rank-bm25、jieba。
+构建者还需在 Claude Code 的 `CLAUDE.md` 中添加 skill 触发配置（`ewankb install` 会自动处理），并在知识库目录中配置 `llm_config.json`（LLM API 凭证）。
+
+如需从源码开发：
+```bash
+git clone https://github.com/Ewan-Jone/ewan-kb.git
+cd ewan-kb
+pip install -e .
+ewankb install
+```
+
+依赖：Python 3.10+、graphifyy、anthropic SDK、rank-bm25、jieba。
 
 ### CLI 命令
 
@@ -249,11 +285,18 @@ ewankb discover                 域发现
 ewankb knowledgebase            构建 domains/ + knowledgeBase/
 ewankb build-graph              构建图谱
 ewankb build                    完整构建（knowledgebase + graph）
+ewankb build --kb               仅构建 domains + knowledgeBase
+ewankb build --graph            仅构建图谱
 ewankb query <text>             图谱查询
 ewankb query-kb <text>          文档检索
 ewankb graph-stats              图谱统计
-ewankb diff                     检测变更
-ewankb preflight [--fix]        环境检查
+ewankb diff                     检测变更（增量构建）
+ewankb rebuild                  清理所有生成产物，准备全量重建
+ewankb preflight [--fix]        环境检查（--fix 自动创建缺失项）
+ewankb config                   查看项目配置
+ewankb config --edit            编辑 project_config.json
+ewankb config --edit-llm        编辑 llm_config.json（API 凭证）
+ewankb install                  安装 Claude Code skills
 ```
 
 ## 已知限制
@@ -261,6 +304,7 @@ ewankb preflight [--fix]        环境检查
 - 代码域发现目前仅支持 Java（基于包路径提取 segment）
 - LLM 语义提取质量依赖 prompt 和模型能力
 - 图谱的语义节点提取（文档→图谱）仅通过 Claude Code skill 触发，CLI 单独执行 `build-graph` 只有 AST 节点
+- 消费者 clone 知识库后需自行创建 `llm_config.json` 配置 LLM API 凭证（`ewankb preflight --fix` 可自动生成模板）
 
 ## License
 

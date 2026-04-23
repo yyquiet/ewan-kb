@@ -33,13 +33,11 @@ ewankb preflight --fix --dir .
 解析 JSON 输出：
 - `ready: true` 且无 `config_created` → 继续第 2 步
 - `blockers` 含 `no_java_files` → 告诉用户把 Java 代码放到 `source/repos/`，停止
-- `blockers` 含 `no_api_key` → 通过对话询问用户 API key，然后用 Edit 工具写入 `project_config.json`
+- `blockers` 含 `no_api_key` → 通过对话询问用户 API key，然后用 Edit 工具写入 `llm_config.json`
+- `blockers` 含 `no_llm_config` → `llm_config.json` 缺失，用 `ewankb preflight --fix` 自动创建，然后询问用户填入 API key
 - **`config_created: true`** → 首次初始化。**必须**调用 `AskUserQuestion` 展示大模型配置（API Key 前缀、Base URL、Model），让用户选择"继续使用当前配置"或"修改配置"
 
-如果 `ewankb` 命令不存在，改用：
-```bash
-PYTHONPATH="$EWANKB_ROOT" python -m ewankb preflight --fix --dir .
-```
+如果 `ewankb` 命令不存在，请先运行 `pip install ewankb`。
 
 ### 第 2 步 — 域发现
 

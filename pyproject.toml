@@ -7,18 +7,19 @@ name = "ewankb"
 version = "0.1.0"
 description = "Build structured knowledge bases from documents and code, with graph-based querying."
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [
-    {name = "Ewan", email = "ewankb@example.com"},
+    {name = "Ewan", email = "475299613@qq.com"},
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
     "graphifyy>=0.4.0",
@@ -42,8 +43,8 @@ dev = [
 ewankb = "ewankb.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/ewankb/ewan-kb"
-Documentation = "https://github.com/ewankb/ewan-kb#readme"
+Homepage = "https://github.com/Ewan-Jone/ewan-kb"
+Documentation = "https://github.com/Ewan-Jone/ewan-kb#readme"
 
 [tool.setuptools.packages.find]
 where = ["."]

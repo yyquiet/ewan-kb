@@ -3,9 +3,10 @@
 """
 Ewan-kb configuration loader.
 
-Loads from two levels:
+Loads from three levels:
   - ~/.config/ewankb/ewankb.toml (global defaults)
-  - project_dir/project_config.json (per-project overrides)
+  - project_dir/project_config.json (project metadata, safe to commit)
+  - project_dir/llm_config.json (LLM credentials, git-ignored)
 """
 from __future__ import annotations
 
@@ -149,6 +150,23 @@ def get_project_config() -> dict[str, Any]:
     return _project_cfg
 
 
+_llm_cfg: dict[str, Any] | None = None
+
+
+def get_llm_config() -> dict[str, Any]:
+    """Load llm_config.json from the current kb directory."""
+    global _llm_cfg
+    if _llm_cfg is not None:
+        return _llm_cfg
+    kb_dir = get_kb_dir()
+    cfg_path = kb_dir / "llm_config.json"
+    if not cfg_path.exists():
+        return {}
+    with open(cfg_path, encoding="utf-8") as f:
+        _llm_cfg = json.load(f)
+    return _llm_cfg
+
+
 def get_kb_dir() -> Path:
     """Knowledge base root directory."""
     return _get_ewankb_dir()
@@ -273,6 +291,41 @@ def get_system_fields() -> set:
     return set(get_project_config().get("system_fields", []))
 
 
+def get_segment_stopwords() -> tuple[frozenset, frozenset, frozenset]:
+    """Read segment stopwords from project_config.json. Returns (stopwords, wrappers, noise) frozensets."""
+    pcfg = get_project_config()
+    data = pcfg.get("segment_stopwords", {})
+    if not data:
+        # Old project_config.json without segment_stopwords — migrate by writing built-in defaults
+        builtin = _load_builtin_stopwords()
+        _migrate_stopwords_to_config(builtin)
+        data = builtin
+    return (
+        frozenset(data.get("segment_stopwords", {}).get("words", [])),
+        frozenset(data.get("package_wrappers", {}).get("words", [])),
+        frozenset(data.get("generic_noise", {}).get("words", [])),
+    )
+
+
+def _migrate_stopwords_to_config(builtin: dict) -> None:
+    """Write built-in segment_stopwords into an old project_config.json that lacks them."""
+    global _project_cfg
+    kb_dir = get_kb_dir()
+    cfg_path = kb_dir / "project_config.json"
+    if not cfg_path.exists():
+        return
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            raw = json.load(f)
+        raw["segment_stopwords"] = builtin
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(raw, f, indent=2, ensure_ascii=False)
+        _project_cfg = raw  # update cache
+        print(f"  Migrated built-in segment_stopwords into {cfg_path}", file=sys.stderr)
+    except Exception:
+        pass
+
+
 # ── Domain directory helpers ──────────────────────────────────────────────────
 
 _DEFAULT_DOC_TYPE_RULES = [
@@ -285,35 +338,67 @@ _DEFAULT_DOC_TYPE_RULES = [
 
 
 def create_project_config(target_dir: Path, project_name: str) -> dict:
-    """Create a new project_config.json at target_dir. Returns the config dict."""
+    """Create project_config.json (metadata) and llm_config.json (LLM credentials). Returns project config dict."""
     gcfg = get_global_config()
-    config = {
+
+    # Load built-in stopwords from tools/discover/segment_stopwords.json
+    stopwords_data = _load_builtin_stopwords()
+
+    # project_config.json — safe to commit
+    project_cfg = {
         "project_name": project_name,
         "system_name": target_dir.name,
-        "api_key": "",
-        "base_url": gcfg.base_url,
-        "model": gcfg.default_model,
         "doc_type_rules": _DEFAULT_DOC_TYPE_RULES,
         "source_dirs": [],
         "code_structure": {},
+        "segment_stopwords": stopwords_data,
     }
-    cfg_path = target_dir / "project_config.json"
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
-    return config
+    with open(target_dir / "project_config.json", "w", encoding="utf-8") as f:
+        json.dump(project_cfg, f, indent=2, ensure_ascii=False)
+
+    # llm_config.json — git-ignored, user must fill in
+    llm_cfg = {
+        "api_key": "",
+        "base_url": gcfg.base_url,
+        "model": gcfg.default_model,
+        "api_protocol": "anthropic",
+    }
+    with open(target_dir / "llm_config.json", "w", encoding="utf-8") as f:
+        json.dump(llm_cfg, f, indent=2, ensure_ascii=False)
+
+    return project_cfg
+
+
+def _load_builtin_stopwords() -> dict:
+    """Read built-in segment_stopwords.json from the ewankb tools directory."""
+    import importlib.resources
+    try:
+        # Try reading from package data first (pip install)
+        pkg_path = Path(__file__).resolve().parent.parent / "tools" / "discover" / "segment_stopwords.json"
+        if pkg_path.exists():
+            return json.loads(pkg_path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    # Fallback: empty structure
+    return {
+        "segment_stopwords": {"words": []},
+        "package_wrappers": {"words": []},
+        "generic_noise": {"words": []},
+    }
 
 
 # ── LLM 统一调用层 ──────────────────────────────────────────────────────────
 
 def _resolve_llm_config() -> dict:
-    """从 project_config + global_config 解析 LLM 配置。"""
+    """从 llm_config.json + project_config.json(兼容旧版) + global_config 解析 LLM 配置。"""
+    llm = get_llm_config()
     pcfg = get_project_config()
     gcfg = get_global_config()
     return {
-        "api_key": pcfg.get("api_key") or gcfg.api_key,
-        "base_url": pcfg.get("base_url") or gcfg.base_url,
-        "model": pcfg.get("model") or gcfg.default_model,
-        "protocol": pcfg.get("api_protocol", "anthropic"),  # "anthropic" or "openai"
+        "api_key": llm.get("api_key") or pcfg.get("api_key") or gcfg.api_key,
+        "base_url": llm.get("base_url") or pcfg.get("base_url") or gcfg.base_url,
+        "model": llm.get("model") or pcfg.get("model") or gcfg.default_model,
+        "protocol": llm.get("api_protocol") or pcfg.get("api_protocol", "anthropic"),
     }
 
 
